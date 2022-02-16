@@ -5,10 +5,18 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace MemoryMappedFiles
 {
-	public sealed unsafe class GrowableMemoryMappedFile : IDisposable
+	public interface IExportableWrittenZones
+	{
+		void ExportWritenZones();
+
+		void LoadWrittenZonesMeta(string file);
+	}
+
+	public sealed unsafe class GrowableMemoryMappedFile : IExportableWrittenZones, IDisposable
 	{
 		private const int AllocationGranularity = 64 * 1024;
 		private const sbyte WriteDelimiterZone = sbyte.MaxValue;
@@ -250,6 +258,44 @@ namespace MemoryMappedFiles
 			fs.Position = 0;
 			fs.SetLength(0);
 			areas.RemoveRange(1, areas.Count - 1);
+		}
+
+		public void ExportWritenZones()
+		{
+			StreamWriter sW = new StreamWriter($"{_memoryFileName}.meta-zones");
+
+			foreach (Range range in streamRanges)
+			{
+				sW.WriteLine(range.ToString());
+			}
+
+			sW.Flush();
+			sW.Close();
+		}
+
+		public void LoadWrittenZonesMeta(string file)
+		{
+			if (!Path.GetExtension(file).EndsWith("meta-zones"))
+			{
+				throw new ArgumentException("Invalid file extension.", nameof(file));
+			}
+
+			StreamReader sR = new StreamReader(file);
+			Regex pattern = new Regex("(?<start>.*) ={3}> (?<end>.*);", RegexOptions.Singleline | RegexOptions.Compiled);
+
+			long start, end;
+
+			while (!sR.EndOfStream)
+			{
+				Match data = pattern.Match(sR.ReadLine());
+				
+				start = long.Parse(data.Groups["start"].Value);
+				end = long.Parse(data.Groups["end"].Value);
+
+				streamRanges.Add(new Range(start, end));			
+			}
+
+			sR.Close();
 		}
 	}
 }
