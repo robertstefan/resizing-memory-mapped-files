@@ -4,18 +4,10 @@ using System.ComponentModel;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace MemoryMappedFiles
 {
-	public interface IExportableWrittenZones
-	{
-		void ExportWritenZones();
-
-		void LoadWrittenZonesMeta(string file);
-	}
-
 	public sealed unsafe class GrowableMemoryMappedFile : IExportableWrittenZones, IDisposable
 	{
 		private const int AllocationGranularity = 64 * 1024;
@@ -260,9 +252,11 @@ namespace MemoryMappedFiles
 			areas.RemoveRange(1, areas.Count - 1);
 		}
 
-		public void ExportWritenZones()
+		public void ExportWrittenZones(out string metaFile)
 		{
-			StreamWriter sW = new StreamWriter($"{_memoryFileName}.meta-zones");
+			metaFile = $"{_memoryFileName}.meta-zones";
+
+			StreamWriter sW = new StreamWriter(metaFile);
 
 			foreach (Range range in streamRanges)
 			{
@@ -273,14 +267,14 @@ namespace MemoryMappedFiles
 			sW.Close();
 		}
 
-		public void LoadWrittenZonesMeta(string file)
+		public void LoadWrittenZonesMeta(string metaFile)
 		{
-			if (!Path.GetExtension(file).EndsWith("meta-zones"))
+			if (!Path.GetExtension(metaFile).EndsWith("meta-zones"))
 			{
-				throw new ArgumentException("Invalid file extension.", nameof(file));
+				throw new ArgumentException("Invalid file extension.", nameof(metaFile));
 			}
 
-			StreamReader sR = new StreamReader(file);
+			StreamReader sR = new StreamReader(metaFile);
 			Regex pattern = new Regex("(?<start>.*) ={3}> (?<end>.*);", RegexOptions.Singleline | RegexOptions.Compiled);
 
 			long start, end;
