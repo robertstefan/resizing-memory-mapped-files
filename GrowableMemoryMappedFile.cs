@@ -12,6 +12,7 @@ namespace MemoryMappedFiles
 	{
 		private const int AllocationGranularity = 64 * 1024;
 		private const sbyte WriteDelimiterZone = sbyte.MaxValue;
+		private readonly Crc32 _dataIntegrityChecker;
 
 		private class MemoryMappedArea
 		{
@@ -64,9 +65,13 @@ namespace MemoryMappedFiles
 			else
 			{
 				fs.SetLength(initialFileSize);
+
+				SetMemoryName(Path.GetFileNameWithoutExtension(filePath));
 			}
 
 			CreateFirstArea();
+
+			_dataIntegrityChecker = new Crc32();
 		}
 
 		private void CreateFirstArea()
@@ -180,6 +185,13 @@ namespace MemoryMappedFiles
 			areas.Clear();
 		}
 
+		public void Dispose(Action afterDispose)
+		{
+			Dispose();
+
+			afterDispose?.Invoke();
+		}
+
 		private void CheckDisposed()
 		{
 			if (isDisposed) throw new ObjectDisposedException(this.GetType().Name);
@@ -202,26 +214,38 @@ namespace MemoryMappedFiles
 
 		public void WriteData(byte[] data)
 		{
-			var mmf = areas.LastOrDefault()?.Mmf;
+			try
 			{
-				long startPos = streamRanges.Count > 0 ? streamRanges.LastOrDefault().End + WriteDelimiterZone : 0;
-
-				using (var accessor = mmf?.CreateViewAccessor())
+				var mmf = areas.LastOrDefault()?.Mmf;
 				{
-					accessor?.WriteArray(startPos, data, 0, data.Length);
+					long startPos = streamRanges.Count > 0 ? streamRanges.LastOrDefault().End + WriteDelimiterZone : 0;
 
-					streamRanges.Add(new Range(startPos, startPos + data.Length));
-
-					byte[] debugData;
-					ReadData(streamRanges.LastOrDefault(), out debugData);
-
-					if (!debugData.SequenceEqual(data))
+					using (var accessor = mmf?.CreateViewAccessor())
 					{
-						throw new IOException("Data was not written");
-					}
+						accessor?.WriteArray(startPos, data, 0, data.Length);
 
-					accessor?.Flush();
+						streamRanges.Add(new Range(startPos, startPos + data.Length));
+
+						byte[] debugData;
+						ReadData(streamRanges.LastOrDefault(), out debugData);
+
+						if (_dataIntegrityChecker.ComputeChecksum(data) != _dataIntegrityChecker.ComputeChecksum(debugData))
+						{
+							throw new IOException("Data was not written");
+						}
+
+						accessor?.Flush();
+					}
 				}
+			}
+			catch (InternalBufferOverflowException)
+			{
+				Grow(256 * 1024 * 1024);
+				WriteData(data);
+			}
+			catch (Exception)
+			{
+				throw;
 			}
 		}
 
@@ -282,14 +306,28 @@ namespace MemoryMappedFiles
 			while (!sR.EndOfStream)
 			{
 				Match data = pattern.Match(sR.ReadLine());
-				
+
 				start = long.Parse(data.Groups["start"].Value);
 				end = long.Parse(data.Groups["end"].Value);
 
-				streamRanges.Add(new Range(start, end));			
+				streamRanges.Add(new Range(start, end));
 			}
 
 			sR.Close();
+		}
+	
+		public void CleanUp(string baseFileName)
+		{
+			try
+			{
+				CheckDisposed();
+			}
+			catch (ObjectDisposedException)
+			{
+				// It's ok to throw exception as we need to have the resources freed
+				File.Delete($"{baseFileName}.data");
+				File.Delete($"{baseFileName}.meta-zones");
+			}
 		}
 	}
 }
